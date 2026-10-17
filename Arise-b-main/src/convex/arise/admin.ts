@@ -10,10 +10,12 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { requireActiveAdmin } from "../lib/authz";
 import { PLAN_MAP } from "./billing";
+import { listSymbols } from "../../lib/arise/providers";
 import {
   buildAgentRows,
   feedState,
   mergeAuditRows,
+  providerStatus,
   symbolFreshness,
 } from "../../lib/arise/adminLogic";
 
@@ -409,27 +411,31 @@ export const marketDataStatus = query({
     const lastFetch = recent[0]?.dataTimestamp;
     const age = lastFetch ? Math.round((now - lastFetch) / 1000) : null;
     const state = feedState(age);
-    // Provider rows use the SAME classifier as the overall feed state. The previous
-    // inline `age < 6h ? LIVE : STALE` test reported a future-dated timestamp as LIVE,
-    // which is precisely the false freshness signal the classifier now refuses.
-    const providerState = feedState(age);
     const symbols = symbolFreshness(recent, now, 12);
+    // Each provider row is derived only from decisions that carry that provider's
+    // data. A fresh Binance fetch must not make Yahoo look LIVE, and no evidence
+    // for a provider is OFFLINE — not a fabricated healthy state.
+    const allSymbols = listSymbols();
     return {
       providers: [
-        {
+        providerStatus({
           name: "BINANCE",
           markets: "Crypto",
-          state: providerState,
-          lastFetch: lastFetch ?? null,
-          failures: dataEvents.filter((e) => e.code === "PROVIDER_FAILURE").length,
-        },
-        {
+          source: "binance",
+          symbols: allSymbols.filter((s) => s.assetClass === "crypto").map((s) => s.symbol),
+          decisions: recent,
+          events: dataEvents,
+          now,
+        }),
+        providerStatus({
           name: "YAHOO FINANCE",
           markets: "Forex",
-          state: providerState,
-          lastFetch: lastFetch ?? null,
-          failures: dataEvents.filter((e) => e.code === "PROVIDER_FAILURE").length,
-        },
+          source: "yahoo",
+          symbols: allSymbols.filter((s) => s.assetClass === "forex").map((s) => s.symbol),
+          decisions: recent,
+          events: dataEvents,
+          now,
+        }),
       ],
       state,
       ageSec: age,

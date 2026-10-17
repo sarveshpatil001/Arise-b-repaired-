@@ -10,10 +10,9 @@ import {
   mutation,
   query,
 } from "../_generated/server";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "../_generated/api";
-import { requireActiveAdmin, requireActiveUser } from "../lib/authz";
-import { fetchMarketData, listSymbols } from "../../lib/arise/providers";
+import { requireActiveAdmin, requireActiveUser, requireActiveUserIfSignedIn } from "../lib/authz";
+import { fetchMarketData, isPrimarySeries, listSymbols } from "../../lib/arise/providers";
 import {
   DEFAULT_BT_CONFIG,
   runBacktest,
@@ -117,11 +116,11 @@ export const create = mutation({
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return [];
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return [];
     return await ctx.db
       .query("bots")
-      .withIndex("userId", (q) => q.eq("userId", userId))
+      .withIndex("userId", (q) => q.eq("userId", viewer.userId))
       .collect();
   },
 });
@@ -129,8 +128,9 @@ export const list = query({
 export const runs = query({
   args: { botId: v.optional(v.id("bots")), limit: v.optional(v.number()) },
   handler: async (ctx, { botId, limit }) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return [];
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return [];
+    const userId = viewer.userId;
     const lim = Math.min(Math.max(limit ?? 30, 1), 100);
     if (botId) {
       const bot = await ctx.db.get(botId);
@@ -154,10 +154,10 @@ export const runs = query({
 export const get = query({
   args: { runId: v.id("backtestRuns") },
   handler: async (ctx, { runId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return null;
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return null;
     const run = await ctx.db.get(runId);
-    if (!run || run.userId !== userId) return null;
+    if (!run || run.userId !== viewer.userId) return null;
     return run;
   },
 });
@@ -250,16 +250,8 @@ export const runTest = action({
     const meta = listSymbols().find((s) => s.symbol === a.symbol);
     if (!meta) throw new Error(`unsupported symbol ${a.symbol}`);
 
-    // plan gating (shared with analyses)
-    const ents = await ctx.runQuery(
-      internal.arise.billingFunctions.myEntitlementsInternal,
-      {},
-    );
-    if (ents.remainingToday === 0) {
-      throw new Error(
-        `PLAN_LIMIT_REACHED: The ${ents.planName} plan allows ${ents.analysisLimitPerDay} analyses per day. Upgrade to continue.`,
-      );
-    }
+    // Plan quota is reserved atomically before any provider work (shared with analyses).
+    await ctx.runMutation(internal.arise.billingFunctions.reserveAnalysisInternal, {});
 
     let bars: BTBar[];
     let dataKind = "REAL";
@@ -284,6 +276,14 @@ export const runTest = action({
           at: Date.now(),
         });
         throw new Error(`MARKET_DATA_UNAVAILABLE: ${msg}`);
+      }
+      // Backtests are measured evidence. A fallback instrument or interval must
+      // not be labelled REAL data for the requested symbol/timeframe: a Delta demo
+      // perpetual is not Binance spot, and a 15m series is not the requested 1h.
+      if (!isPrimarySeries(a.symbol, fetched)) {
+        throw new Error(
+          `MARKET_DATA_UNAVAILABLE: primary series unavailable for ${a.symbol} ${a.interval} (got ${fetched.data.provider} ${fetched.interval})`,
+        );
       }
       bars = fetched.data.bars.map((b) => ({ ...b }));
       dataSource = fetched.data.provider;
@@ -413,14 +413,6 @@ export const runTest = action({
         trades,
         error: undefined,
         createdAt: Date.now(),
-      },
-    );
-
-    await ctx.runMutation(
-      internal.arise.billingFunctions.incrementUsageInternal,
-      {
-        userId,
-        dayKey: new Date(Date.now()).toISOString().slice(0, 10),
       },
     );
 

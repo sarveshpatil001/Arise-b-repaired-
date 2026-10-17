@@ -4,6 +4,7 @@ import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import {
   fetchMarketData,
+  isPrimarySeries,
   listSymbols,
 } from "../../lib/arise/providers";
 import { buildSnapshot, runDecisionPipeline } from "../../lib/arise/pipeline";
@@ -33,14 +34,6 @@ export const decide = action({
       throw new Error(`PLATFORM_HALTED: ${halt.haltReason ?? "administrative halt"}`);
     }
 
-    // -------- plan entitlements (server-side gating; fail-closed) --------
-    const ents = await ctx.runQuery(internal.arise.billingFunctions.myEntitlementsInternal, {});
-    if (ents.remainingToday === 0) {
-      throw new Error(
-        `PLAN_LIMIT_REACHED: The ${ents.planName} plan allows ${ents.analysisLimitPerDay} analyses per day. Upgrade to continue.`,
-      );
-    }
-
     const now = Date.now();
     const cfg = { ...DEFAULT_CONFIG };
 
@@ -52,6 +45,11 @@ export const decide = action({
 
     const meta = listSymbols().find((s) => s.symbol === symbol);
     if (!meta) throw new Error(`unsupported symbol ${symbol}`);
+
+    // -------- plan quota (atomic, before any provider work) --------
+    // Check-and-increment in one serialized mutation. A separate read followed by a
+    // later increment let concurrent requests all pass on the last remaining analysis.
+    await ctx.runMutation(internal.arise.billingFunctions.reserveAnalysisInternal, {});
 
     // -------- market data (real providers only) --------
     const fetchStart = Date.now();
@@ -67,6 +65,19 @@ export const decide = action({
       throw new Error(`MARKET_DATA_UNAVAILABLE: ${msg}`);
     }
     const fetchMs = Date.now() - fetchStart;
+
+    // A decision that can execute may only use the requested instrument and
+    // interval from its primary provider. A Delta demo perpetual (BTCUSD) is not
+    // Binance spot (BTCUSDT), and a 15m fallback is not the requested 1h series.
+    // The 4h Yahoo resample is same-provider/same-interval and remains allowed.
+    if (!isPrimarySeries(symbol, fetched)) {
+      const detail = `primary ${meta.assetClass} series unavailable; got ${fetched.data.provider} ${fetched.interval}${fetched.fellBack ? ` (fallback: ${fetched.fallbackFrom ?? "unknown"})` : ""}`;
+      await ctx.runMutation(internal.arise.system.record, {
+        level: "ERROR", area: "DATA", code: "DATA_PROVENANCE_INVALID",
+        message: `${symbol}: ${detail}`.slice(0, 400), at: Date.now(),
+      });
+      throw new Error(`DATA_INVALID: ${detail}`);
+    }
 
     const { snapshot, errorCode } = buildSnapshot(fetched.data.bars, {
       symbol,
@@ -100,8 +111,15 @@ export const decide = action({
       }
       const markStart = Date.now();
       try {
-        const markFetch = markSymbol === symbol ? fetched : await fetchMarketData(markSymbol, interval, 10);
+        // Fetch a full validation window: buildSnapshot applies the same minBars
+        // requirement as a decision, so a 10-bar mark series would always look
+        // degraded and block every portfolio-bearing decision.
+        const markFetch = markSymbol === symbol ? fetched : await fetchMarketData(markSymbol, interval, 400);
         portfolioFetchMs += Date.now() - markStart;
+        if (!isPrimarySeries(markSymbol, markFetch)) {
+          markErrors.push(`${markSymbol}: primary ${markMeta.assetClass} series unavailable (${markFetch.data.provider} ${markFetch.interval})`);
+          continue;
+        }
         const validated = buildSnapshot(markFetch.data.bars, {
           symbol: markSymbol,
           assetClass: markMeta.assetClass,
@@ -112,9 +130,13 @@ export const decide = action({
           bestAsk: markFetch.data.bestAsk,
           source: markFetch.data.provider,
         });
-        const completedBars = validated.snapshot?.bars.filter(
+        if (!validated.snapshot || validated.snapshot.quality !== "valid") {
+          markErrors.push(`${markSymbol}: market data ${validated.snapshot?.quality ?? "invalid"}`);
+          continue;
+        }
+        const completedBars = validated.snapshot.bars.filter(
           (bar) => bar.time + intervalMs(markFetch.interval) <= now,
-        ) ?? [];
+        );
         const completed = completedBars[completedBars.length - 1];
         if (!completed || !isFresh({ price: completed.close, time: completed.time, interval: markFetch.interval, completed: true }, now, createFreshnessPolicy(cfg.barStaleMultiplier)).fresh) {
           markErrors.push(`${markSymbol}: no fresh completed candle`);
@@ -455,12 +477,6 @@ export const decide = action({
       marks: [{ symbol, close: lastBar.close, time: lastBar.time, high: lastBar.high, low: lastBar.low, interval: snapshot.interval }],
       portfolioMarks: Object.values(marks),
       barStaleMultiplier: cfg.barStaleMultiplier,
-    });
-
-    // -------- usage metering --------
-    await ctx.runMutation(internal.arise.billingFunctions.incrementUsageInternal, {
-      userId,
-      dayKey: new Date(now).toISOString().slice(0, 10),
     });
 
     // -------- equity point (monitoring) --------

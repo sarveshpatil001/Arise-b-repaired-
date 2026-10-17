@@ -16,6 +16,7 @@ const Dashboard = lazy(() => import("./pages/Dashboard.tsx"));
 const Bots = lazy(() => import("./pages/Bots.tsx"));
 const Markets = lazy(() => import("./pages/Markets.tsx"));
 const Intelligence = lazy(() => import("./pages/Intelligence.tsx"));
+const Analysis = lazy(() => import("./pages/Analysis.tsx"));
 const Trades = lazy(() => import("./pages/Trades.tsx"));
 const Risk = lazy(() => import("./pages/Risk.tsx"));
 const SystemPage = lazy(() => import("./pages/System.tsx"));
@@ -162,6 +163,14 @@ createRoot(document.getElementById("root")!).render(
                 element={
                   <RequireAuth>
                     <Intelligence />
+                  </RequireAuth>
+                }
+              />
+              <Route
+                path="/dashboard/analysis"
+                element={
+                  <RequireAuth>
+                    <Analysis />
                   </RequireAuth>
                 }
               />

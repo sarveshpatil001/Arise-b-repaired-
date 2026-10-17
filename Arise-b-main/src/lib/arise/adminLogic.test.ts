@@ -9,6 +9,7 @@ import {
   CLOCK_SKEW_TOLERANCE_SEC,
   feedState,
   mergeAuditRows,
+  providerStatus,
   symbolFreshness,
   type DecisionLike,
 } from "./adminLogic";
@@ -194,6 +195,52 @@ describe("symbolFreshness", () => {
     const normal = symbolFreshness([{ symbol: "EURUSD", dataTimestamp: NOW - 5 * MIN }], NOW);
     expect(normal[0].invalid).toBe(false);
     expect(normal[0].ageSec).toBe(5 * 60);
+  });
+});
+
+describe("providerStatus", () => {
+  const decisions = [
+    { dataTimestamp: NOW - 2 * MIN, dataSource: "binance" },
+    { dataTimestamp: NOW - 60 * MIN, dataSource: "yahoo" },
+    { dataTimestamp: NOW - 3 * HOUR, dataSource: "delta" },
+  ];
+
+  it("uses only decisions that carry the provider's data", () => {
+    const binance = providerStatus({
+      name: "BINANCE", markets: "Crypto", source: "binance", symbols: ["BTCUSDT"],
+      decisions, events: [], now: NOW,
+    });
+    const yahoo = providerStatus({
+      name: "YAHOO FINANCE", markets: "Forex", source: "yahoo", symbols: ["EURUSD"],
+      decisions, events: [], now: NOW,
+    });
+    expect(binance.lastFetch).toBe(NOW - 2 * MIN);
+    expect(binance.state).toBe("LIVE");
+    expect(yahoo.lastFetch).toBe(NOW - 60 * MIN);
+    expect(yahoo.state).toBe("DELAYED");
+  });
+
+  it("reports OFFLINE rather than borrowing another provider's freshness", () => {
+    const yahoo = providerStatus({
+      name: "YAHOO FINANCE", markets: "Forex", source: "yahoo", symbols: ["EURUSD"],
+      decisions: [{ dataTimestamp: NOW - MIN, dataSource: "binance" }], events: [], now: NOW,
+    });
+    expect(yahoo.lastFetch).toBeNull();
+    expect(yahoo.state).toBe("OFFLINE");
+  });
+
+  it("counts only provider failures naming that provider's symbols", () => {
+    const binance = providerStatus({
+      name: "BINANCE", markets: "Crypto", source: "binance", symbols: ["BTCUSDT"],
+      decisions,
+      events: [
+        { code: "PROVIDER_FAILURE", message: "BTCUSDT: timeout" },
+        { code: "PROVIDER_FAILURE", message: "EURUSD: timeout" },
+        { code: "NEWS_FETCH_FAILED", message: "BTCUSDT: feed" },
+      ],
+      now: NOW,
+    });
+    expect(binance.failures).toBe(1);
   });
 });
 

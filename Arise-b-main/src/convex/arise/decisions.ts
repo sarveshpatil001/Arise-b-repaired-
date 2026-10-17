@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, query } from "../_generated/server";
-import { getAuthUserId } from "@convex-dev/auth/server";
+import { requireActiveUserIfSignedIn } from "../lib/authz";
 
 const DECISION_LIMIT = 120;
 
@@ -81,11 +81,11 @@ export const setExecution = internalMutation({
 export const list = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit }) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return [];
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return [];
     const rows = await ctx.db
       .query("decisions")
-      .withIndex("userId", (q) => q.eq("userId", userId))
+      .withIndex("userId", (q) => q.eq("userId", viewer.userId))
       .collect();
     return rows.sort((a, b) => b.dataTimestamp - a.dataTimestamp).slice(0, limit ?? 40);
   },
@@ -94,10 +94,10 @@ export const list = query({
 export const byId = query({
   args: { id: v.id("decisions") },
   handler: async (ctx, { id }) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return null;
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return null;
     const doc = await ctx.db.get(id);
-    if (!doc || doc.userId !== userId) return null; // user isolation
+    if (!doc || doc.userId !== viewer.userId) return null; // user isolation
     return doc;
   },
 });
@@ -105,11 +105,11 @@ export const byId = query({
 export const latest = query({
   args: { symbol: v.optional(v.string()) },
   handler: async (ctx, { symbol }) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return null;
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return null;
     const rows = await ctx.db
       .query("decisions")
-      .withIndex("userId", (q) => q.eq("userId", userId))
+      .withIndex("userId", (q) => q.eq("userId", viewer.userId))
       .collect();
     const sorted = rows.sort((a, b) => b.dataTimestamp - a.dataTimestamp);
     if (symbol) {

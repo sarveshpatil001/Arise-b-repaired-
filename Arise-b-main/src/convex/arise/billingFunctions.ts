@@ -5,8 +5,8 @@ import { v } from "convex/values";
 import { action, mutation, query, internalMutation, internalQuery } from "../_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { api, internal } from "../_generated/api";
-import { requireActiveAdmin, requireActiveUser } from "../lib/authz";
-import type { QueryCtx } from "../_generated/server";
+import { requireActiveAdmin, requireActiveUser, requireActiveUserIfSignedIn } from "../lib/authz";
+import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import {
   PLANS,
@@ -69,11 +69,11 @@ export const seedPlans = internalMutation({
 export const mySubscription = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return null;
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return null;
     return await ctx.db
       .query("subscriptions")
-      .withIndex("userId", (q) => q.eq("userId", userId))
+      .withIndex("userId", (q) => q.eq("userId", viewer.userId))
       .first();
   },
 });
@@ -424,7 +424,7 @@ const ADMIN_SCAN_CAP = 5000;
  *   3. otherwise the free plan.
  */
 async function resolveEntitlements(
-  ctx: QueryCtx,
+  ctx: QueryCtx | MutationCtx,
   userId: Id<"users"> | null,
   now: number,
 ): Promise<Entitlements> {
@@ -507,7 +507,8 @@ async function resolveEntitlements(
 export const myEntitlements = query({
   args: {},
   handler: async (ctx): Promise<Entitlements> => {
-    return await resolveEntitlements(ctx, await getAuthUserId(ctx), Date.now());
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    return await resolveEntitlements(ctx, viewer?.userId ?? null, Date.now());
   },
 });
 
@@ -623,6 +624,46 @@ export const planGrantsInternal = internalQuery({
   handler: async (ctx) => {
     const rows = await ctx.db.query("planGrants").collect();
     return rows.sort((a, b) => b.grantedAt - a.grantedAt);
+  },
+});
+
+/**
+ * Atomic analysis-quota reservation. This is the ONLY gate that may authorize a
+ * billable analysis: the check and the increment happen in one serialized mutation,
+ * so two concurrent requests cannot both consume the last remaining analysis. The
+ * previous read-then-increment-later flow let every concurrent request observe the
+ * same remaining count and exceed the daily plan limit.
+ */
+export const reserveAnalysisInternal = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<Entitlements> => {
+    const { userId } = await requireActiveUser(ctx);
+    const now = Date.now();
+    const ents = await resolveEntitlements(ctx, userId, now);
+    if (ents.remainingToday === 0) {
+      throw new Error(
+        `PLAN_LIMIT_REACHED: The ${ents.planName} plan allows ${ents.analysisLimitPerDay} analyses per day. Upgrade to continue.`,
+      );
+    }
+    const dayKey = new Date(now).toISOString().slice(0, 10);
+    const row = await ctx.db
+      .query("analysisUsage")
+      .withIndex("userId_day", (q) => q.eq("userId", userId).eq("dayKey", dayKey))
+      .first();
+    const analysesToday = (row?.count ?? 0) + 1;
+    if (row) {
+      await ctx.db.patch(row._id, { count: analysesToday });
+    } else {
+      await ctx.db.insert("analysisUsage", { userId, dayKey, count: 1 });
+    }
+    return {
+      ...ents,
+      analysesToday,
+      remainingToday:
+        ents.analysisLimitPerDay === -1
+          ? -1
+          : Math.max(0, ents.analysisLimitPerDay - analysesToday),
+    };
   },
 });
 

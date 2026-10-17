@@ -452,3 +452,43 @@ describe("monitorHealth", () => {
     expect(h.state).toBe("DEGRADED");
   });
 });
+
+// Regression for post-merge integrity findings: monitoring may only settle on
+// primary-provider, valid, completed data for bars that began after entry.
+describe("monitor settlement provenance and entry timing", () => {
+  it("refuses a fallback provider's mark", () => {
+    const delta: MonitorMark = { ...BTC, source: "delta" };
+    const gate = assessMark(delta, NOW, { barStaleMultiplier: 3 });
+    expect(gate.usable).toBe(false);
+    expect(gate.state).toBe("INVALID");
+    expect(gate.detail).toMatch(/non-primary provider/);
+  });
+
+  it("refuses a degraded series", () => {
+    const degraded: MonitorMark = { ...BTC, quality: "degraded" };
+    const gate = assessMark(degraded, NOW, { barStaleMultiplier: 3 });
+    expect(gate.usable).toBe(false);
+    expect(gate.state).toBe("INVALID");
+    expect(gate.detail).toMatch(/degraded/);
+  });
+
+  it("never evaluates a bar that started before the position was opened", () => {
+    const bar: MonitorBar = { barTime: NOW - 20 * 60_000, high: 60_300, low: 58_000, close: 60_100 };
+    const late = pos({ openedAt: NOW - 10 * 60_000 });
+    expect(evaluateExit(late, bar, NOW)).toBeNull();
+
+    const plan = planEvaluations({
+      positions: [late],
+      marks: { BTCUSDT: { ...BTC, bars: [bar] } },
+      now: NOW,
+      config: { barStaleMultiplier: 3 },
+    });
+    expect(plan.exits).toHaveLength(0);
+  });
+
+  it("still evaluates a bar that began after entry", () => {
+    const bar: MonitorBar = { barTime: NOW - 5 * 60_000, high: 60_300, low: 59_000, close: 59_500 };
+    const late = pos({ openedAt: NOW - 10 * 60_000 });
+    expect(evaluateExit(late, bar, NOW)?.patch.exitReason).toBe("STOP_LOSS");
+  });
+});

@@ -45,6 +45,23 @@ export async function requireActiveUser(ctx: AuthCtx): Promise<AuthorizedUser> {
   return authorized;
 }
 
+/**
+ * Read-path companion to `requireActiveUser`: anonymous callers get `null` (the
+ * existing empty-read contract), but a signed-in account that is missing or
+ * disabled is rejected before any tenant data is returned. A disabled session can
+ * still authenticate; it must not keep reading accounts, positions or billing.
+ */
+export async function requireActiveUserIfSignedIn(ctx: AuthCtx): Promise<AuthorizedUser | null> {
+  const raw = await getAuthUserId(ctx);
+  if (raw === null) return null;
+  const user = await ctx.db.get(raw as Id<"users">);
+  if (!user) return null;
+  if (user.disabled === true) {
+    throw new Error("ACCOUNT_DISABLED: this account has been disabled");
+  }
+  return { userId: user._id, user };
+}
+
 /** Active administrator — the only authorization for administrative endpoints. */
 export async function requireActiveAdmin(ctx: AuthCtx): Promise<AuthorizedUser> {
   const authorized = await requireActiveUser(ctx);

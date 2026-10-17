@@ -118,6 +118,7 @@ const schema = defineSchema(
       // constructed per request — this survives retries and concurrent calls.
       idemKey: v.optional(v.string()),
     })
+      .index("userId", ["userId"])
       .index("userId_status", ["userId", "status"])
       .index("userId_symbol", ["userId", "symbol"])
       .index("decisionId", ["decisionId"])
@@ -352,6 +353,47 @@ const schema = defineSchema(
       .index("proposalId", ["proposalId"])
       .index("status", ["status"])
       .index("at", ["at"]),
+
+    // ---------------- Analysis section (append-only) ----------------
+    // Immutable snapshot of each saved analysis. The original prediction is copied
+    // here when it is first saved and is never updated: later analyses, monitoring
+    // events and paper trades cannot rewrite history. Monitoring/paper outcomes live
+    // on `positions`; this table keeps what was actually predicted and on what evidence.
+    analysisRecords: defineTable({
+      userId: v.id("users"),
+      decisionId: v.id("decisions"),
+      createdAt: v.number(),
+      symbol: v.string(),
+      interval: v.string(),
+      status: v.string(), // TRADE | WAIT | VETOED | ERROR (as recorded)
+      direction: v.string(), // LONG | SHORT | FLAT
+      confidence: v.number(),
+      thesis: v.string(),
+      recommendedAction: v.string(),
+      dataQuality: v.string(),
+      dataSource: v.string(),
+      dataTimestamp: v.number(),
+      snapshotMeta: v.optional(v.any()),
+      plan: v.optional(v.any()),
+      risk: v.optional(v.any()),
+      evidence: v.optional(v.any()),
+      minds: v.optional(v.any()),
+      agents: v.optional(v.any()),
+      features: v.optional(v.any()),
+      // Deterministic trade-plan card derived at save time (entry range, TP1/2/3,
+      // R:R, entry window, holding estimate). Derived values are labelled as such.
+      tradeCard: v.any(),
+      // Strategy attribution when a Strategy Arena run informed the record; null when
+      // the decision came from the existing pipeline alone.
+      strategy: v.optional(v.any()),
+      // News context at analysis time (headline assessment / catalysts), never invented.
+      news: v.optional(v.any()),
+      modelVersion: v.string(),
+    })
+      .index("userId", ["userId"])
+      .index("userId_createdAt", ["userId", "createdAt"])
+      .index("userId_symbol", ["userId", "symbol"])
+      .index("decisionId", ["decisionId"]),
 
     // Append-only administrative audit trail.
     adminAudit: defineTable({

@@ -69,6 +69,7 @@ export const openPositionsBatch = internalQuery({
       positions: page.page.map<MonitorPosition>((p) => ({
         _id: p._id,
         userId: p.userId,
+        openedAt: p.openedAt,
         symbol: p.symbol,
         side: p.side,
         qty: p.qty,
@@ -102,7 +103,11 @@ export const saveOpenCursor = internalMutation({
 async function fetchMonitorMark(symbol: string, now: number): Promise<MonitorMark | null> {
   try {
     const fetched = await fetchMarketData(symbol, "15m", 60);
-    const { bars } = validateBars(fetched.data.bars, {
+    // A fallback provider is not the instrument the position was opened on (Delta
+    // demo perpetual vs Binance spot), and a fallback interval is not the series the
+    // monitor contract expects. Refuse both instead of settling on a different basis.
+    if (fetched.fellBack || fetched.interval !== "15m") return null;
+    const validation = validateBars(fetched.data.bars, {
       symbol,
       assetClass: symbol.endsWith("USDT") ? "crypto" : "forex",
       interval: fetched.interval,
@@ -110,14 +115,19 @@ async function fetchMonitorMark(symbol: string, now: number): Promise<MonitorMar
       config: DEFAULT_CONFIG,
       source: fetched.data.provider,
     });
-    if (bars.length === 0) return null;
-    const recent = bars.slice(-BARS_FOR_MONITORING);
+    if (validation.quality !== "valid") return null;
+    const completed = validation.bars.filter(
+      (bar) => bar.time + intervalMs(fetched.interval) <= now,
+    );
+    if (completed.length === 0) return null;
+    const recent = completed.slice(-BARS_FOR_MONITORING);
     return {
       symbol,
       interval: fetched.interval,
       requestedInterval: "15m",
       source: fetched.data.provider,
-      barsCount: bars.length,
+      quality: validation.quality,
+      barsCount: completed.length,
       bars: recent.map((b) => ({ barTime: b.time, high: b.high, low: b.low, close: b.close })),
     };
   } catch {

@@ -1,7 +1,6 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { internal } from "../_generated/api";
-import { requireActiveUser } from "../lib/authz";
+import { requireActiveUser, requireActiveUserIfSignedIn } from "../lib/authz";
 import { action, internalMutation, internalQuery, mutation, query, type MutationCtx } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { checkExit } from "../../lib/arise/execution";
@@ -57,8 +56,7 @@ async function markAccountLedger(
 export const internalGetAccount = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return null;
+    const { userId } = await requireActiveUser(ctx);
     return await ctx.db
       .query("paperAccounts")
       .withIndex("userId", (q) => q.eq("userId", userId))
@@ -222,6 +220,9 @@ export const maintainPositions = internalMutation({
     for (const pos of open) {
       const mark = marks.find((m) => m.symbol === pos.symbol);
       if (!mark) continue;
+      // Never evaluate a bar that started before the position existed: its high/low
+      // includes price action from before entry and could fabricate an exit.
+      if (mark.time < pos.openedAt) continue;
       const exit = checkExit(
         {
           side: pos.side as "LONG" | "SHORT",
@@ -270,11 +271,11 @@ export const maintainPositions = internalMutation({
 export const myAccount = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return null;
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return null;
     return await ctx.db
       .query("paperAccounts")
-      .withIndex("userId", (q) => q.eq("userId", userId))
+      .withIndex("userId", (q) => q.eq("userId", viewer.userId))
       .first();
   },
 });
@@ -496,11 +497,11 @@ export const closePosition = action({
 export const openPositions = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return [];
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return [];
     return await ctx.db
       .query("positions")
-      .withIndex("userId_status", (q) => q.eq("userId", userId).eq("status", "OPEN"))
+      .withIndex("userId_status", (q) => q.eq("userId", viewer.userId).eq("status", "OPEN"))
       .collect();
   },
 });
@@ -516,8 +517,9 @@ const DEFAULT_CLOSED_POSITIONS = 100;
 export const closedPositions = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit }) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return [];
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return [];
+    const userId = viewer.userId;
     const requested = limit ?? DEFAULT_CLOSED_POSITIONS;
     const bounded = Number.isFinite(requested)
       ? Math.min(Math.max(Math.floor(requested), 1), MAX_CLOSED_POSITIONS)
@@ -542,8 +544,9 @@ const MARK_SCAN_LIMIT = 120;
 export const latestMarks = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) return [];
+    const viewer = await requireActiveUserIfSignedIn(ctx);
+    if (!viewer) return [];
+    const userId = viewer.userId;
     const decs = await ctx.db
       .query("decisions")
       .withIndex("userId", (q) => q.eq("userId", userId))
