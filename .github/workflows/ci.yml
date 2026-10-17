@@ -1,0 +1,69 @@
+name: CI
+
+# Verifies a CLEAN CHECKOUT of the committed source tree.
+#
+# It deliberately does not extract Arise-b-main-repaired.zip: that archive is a
+# snapshot and can lag the source, so testing it would verify old code. Convex
+# generated types are committed (see .gitignore), which is what lets typecheck,
+# tests and the production build run here without a Convex login or any local
+# environment file.
+#
+# The source may live at the repository root (after the layout migration) or in
+# Arise-b-main/ (current layout); the "Locate source" step picks whichever
+# package.json is present.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Locate source
+        id: locate
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+          elif [ -f Arise-b-main/package.json ]; then
+            echo "dir=Arise-b-main" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No package.json found at the repository root or in Arise-b-main/. Commit the source tree before relying on CI."
+            exit 1
+          fi
+
+      - name: Install dependencies (committed lockfile)
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: bunx tsc -b --noEmit
+
+      - name: Lint
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: bun run lint
+
+      - name: Unit + backend tests (in-memory Convex, no network)
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: bun run test
+
+      - name: Production build
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: bun run build
+
+      - name: Dependency audit
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: bun audit

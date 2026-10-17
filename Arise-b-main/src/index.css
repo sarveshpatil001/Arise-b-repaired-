@@ -1,0 +1,214 @@
+/* DO NOT CHANGE */
+@import "tailwindcss";
+@import "tw-animate-css";
+@custom-variant dark (&:is(.dark *));
+
+/* DO NOT CHANGE */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --font-mono: var(--font-aranse-mono);
+  --font-sans: var(--font-aranse-sans);
+}
+
+/* ARISE — institutional quant terminal. Dark, dense, restrained color. */
+:root {
+  --radius: 0.25rem;
+
+  --background: #0d1117;
+  --foreground: #e6edf3;
+  --card: #11161d;
+  --card-foreground: #e6edf3;
+  --popover: #131a22;
+  --popover-foreground: #e6edf3;
+  --primary: #2e7cf6;
+  --primary-foreground: #ffffff;
+  --secondary: #1a212b;
+  --secondary-foreground: #c9d1d9;
+  --muted: #161c25;
+  --muted-foreground: #8b98a9;
+  --accent: #1a2230;
+  --accent-foreground: #e6edf3;
+  --destructive: #f85149;
+  --border: #1d2632;
+  --input: #1d2632;
+  --ring: #2e7cf6;
+
+  --success: #3fb950;
+  --warning: #d29922;
+  --danger: #f85149;
+  --up: #3fb950;
+  --down: #f85149;
+
+  --chart-1: #2e7cf6;
+  --chart-2: #3fb950;
+  --chart-3: #d29922;
+  --chart-4: #bc8cff;
+  --chart-5: #39c5cf;
+
+  --sidebar: #0a0e14;
+  --sidebar-foreground: #c9d1d9;
+  --sidebar-primary: #2e7cf6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #131a22;
+  --sidebar-accent-foreground: #e6edf3;
+  --sidebar-border: #161d27;
+  --sidebar-ring: #2e7cf6;
+
+  --font-aranse-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-aranse-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+.dark {
+  --background: #0d1117;
+  --foreground: #e6edf3;
+  --card: #11161d;
+  --card-foreground: #e6edf3;
+  --popover: #131a22;
+  --popover-foreground: #e6edf3;
+  --primary: #2e7cf6;
+  --primary-foreground: #ffffff;
+  --secondary: #1a212b;
+  --secondary-foreground: #c9d1d9;
+  --muted: #161c25;
+  --muted-foreground: #8b98a9;
+  --accent: #1a2230;
+  --accent-foreground: #e6edf3;
+  --destructive: #f85149;
+  --border: #1d2632;
+  --input: #1d2632;
+  --ring: #2e7cf6;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    font-size: 14px;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-aranse-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  button:not([disabled]),
+  [role="button"]:not([disabled]) {
+    cursor: pointer;
+  }
+  ::selection {
+    background: rgba(46, 124, 246, 0.35);
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #263041;
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #33405a;
+  }
+}
+
+/* Custom utilities registered via @utility so they work with @apply and variants (Tailwind v4). */
+@utility font-terminal {
+  font-family: var(--font-aranse-mono);
+}
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+@utility panel {
+  border: 1px solid var(--border);
+  background-color: var(--card);
+}
+@utility panel-title {
+  font-family: var(--font-aranse-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--muted-foreground);
+}
+@utility grid-bg {
+  background-image:
+    linear-gradient(rgba(46, 124, 246, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(46, 124, 246, 0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+@utility scan-line {
+  background: linear-gradient(90deg, transparent, rgba(46, 124, 246, 0.6), transparent);
+  animation: scan 2.4s ease-in-out infinite;
+}
+@utility pulse-dot {
+  animation: pulseDot 2s ease-in-out infinite;
+}
+@utility flash-up {
+  animation: flashUp 0.6s ease-out;
+}
+@utility flash-down {
+  animation: flashDown 0.6s ease-out;
+}
+
+@keyframes scan {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes flashUp {
+  0% { background-color: rgba(63, 185, 80, 0.25); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flashDown {
+  0% { background-color: rgba(248, 81, 73, 0.25); }
+  100% { background-color: transparent; }
+}
