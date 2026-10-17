@@ -1,0 +1,28 @@
+# ---- dependencies / build output ----
+node_modules
+dist
+# Local Convex deployment state (never share or commit)
+.convex
+# Convex generated types/API are committed on purpose: tests, typecheck and the
+# production build import them, so CI must be able to verify a clean checkout
+# without authenticating to a Convex deployment. Regenerate with
+# `bunx convex dev --once` whenever a Convex function is added or renamed.
+
+# ---- secrets and local environment (never commit) ----
+.env
+.env.*
+.env.keys
+*.pem
+*.p12
+*.key
+
+# placeholder template only — values are empty, safe to commit
+!.env.example
+
+# ---- distributable snapshots ----
+# Source archives must not be committed: they duplicate the tree and can carry
+# environment files. (arise-v1.zip currently contains only source + an empty
+# .env.example, but it must not become a path for secrets into version control.)
+*.zip
+*.tar
+*.tar.gz
