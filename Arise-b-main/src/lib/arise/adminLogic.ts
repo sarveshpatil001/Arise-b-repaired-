@@ -130,6 +130,51 @@ export function symbolFreshness(
   return [...bySymbol.values()].slice(0, limit);
 }
 
+export interface ProviderStatusRow {
+  name: string;
+  markets: string;
+  state: FeedState;
+  lastFetch: number | null;
+  failures: number;
+}
+
+/**
+ * Per-provider health from the decisions that actually carry that provider's data.
+ *
+ * The admin page previously rendered two provider rows that both used the newest
+ * decision's age and the same global failure count. A Binance decision therefore made
+ * Yahoo look LIVE, and a Yahoo decision made Binance look LIVE. Only rows with the
+ * matching `dataSource` may establish that provider's last fetch; no evidence means
+ * OFFLINE, never a fabricated LIVE.
+ */
+export function providerStatus(args: {
+  name: string;
+  markets: string;
+  source: string;
+  symbols: string[];
+  decisions: { dataTimestamp: number; dataSource?: string }[];
+  events: { code: string; message: string }[];
+  now: number;
+}): ProviderStatusRow {
+  const owned = [...args.decisions]
+    .filter((d) => d.dataSource === args.source)
+    .sort((a, b) => b.dataTimestamp - a.dataTimestamp);
+  const lastFetch = owned[0]?.dataTimestamp ?? null;
+  const ageSec = lastFetch === null ? null : Math.round((args.now - lastFetch) / 1000);
+  const failures = args.events.filter(
+    (e) =>
+      e.code === "PROVIDER_FAILURE" &&
+      args.symbols.some((symbol) => e.message.startsWith(`${symbol}:`)),
+  ).length;
+  return {
+    name: args.name,
+    markets: args.markets,
+    state: feedState(ageSec),
+    lastFetch,
+    failures,
+  };
+}
+
 // ---------------- audit log merge ----------------
 
 export interface AuditEntry {

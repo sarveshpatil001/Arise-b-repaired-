@@ -64,8 +64,11 @@ if (frontendUrl) {
   }
 }
 
-const freebuffIssuer =
-  process.env.VLY_CONVEX_AUTH_ISSUER ?? "https://freebuff.com";
+// Fixed issuer: Convex's auth-config validator requires every referenced env var
+// to be set on the deployment. An optional override here made a fresh deployment
+// fail codegen with "VLY_CONVEX_AUTH_ISSUER ... was not set" even though the code
+// had a default. The federated issuer is not deployment-specific.
+const freebuffIssuer = "https://freebuff.com";
 
 export default {
   providers: [

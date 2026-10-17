@@ -90,6 +90,7 @@ POSITION MONITORING (SL/TP on bar extremes) → EQUITY CURVE → AUDIT TRAIL
 | `/dashboard` | **HOME — the decision desk**: BUY/SELL/WAIT, confidence, regime, agent opinions, MIND debate, risk checks, trade plan, invalidation |
 | `/dashboard/markets` | Real candlestick + volume chart, provider/spread/feed status |
 | `/dashboard/intelligence` | Per-agent drill-down, MIND debate detail, live NEWS WIRE (cited headlines + feed health) |
+| `/dashboard/analysis` | **ANALYSIS** — trade plan cards, post-entry monitoring, deterministic risk preview, ten-strategy arena, verified upcoming catalysts, AI performance/health, immutable analysis history |
 | `/dashboard/trades` | Open positions, closed trades, equity curve, win rate, profit factor |
 | `/dashboard/risk` | Live deterministic checks, limits, vetoes, emergency stop |
 | `/dashboard/billing` | Current plan, usage, upgrade checkout, Stripe portal |
@@ -108,13 +109,30 @@ POSITION MONITORING (SL/TP on bar extremes) → EQUITY CURVE → AUDIT TRAIL
   - `evidence.ts` evidence ledger + decision gate (`TRADE`/`WAIT`/`REJECT`, reason codes)
   - `untrusted.ts` external-text sanitizer (news is data, never instructions)
   - `backtest.ts` backtest engine · `strategyFitness.ts` admission gates + promotion policy
+  - `analysis.ts` Analysis section logic (`analysis-v1`): trade cards, post-entry monitoring,
+    risk preview, performance metrics, catalyst validation, module-health honesty layer
+  - `arena.ts` ten-strategy arena (`rule-based`): market classification, no-look-ahead signals,
+    next-open fills, cost-aware OOS metrics and evidence-weighted ranking
   - `learning.ts` controlled-learning proposals (forbidden targets, safety limits, state machine)
   - `execution.ts` paper broker (fee/slip model, idempotency) · `pipeline.ts` orchestrator
 - `src/convex/arise/` — Convex backend: `market.ts` (decision action), `trading.ts`
   (accounts/positions/equity), `decisions.ts` (audit trail), `charts.ts`, `system.ts`, `equity.ts`,
   `news.ts` (public feed fetch), `backtest.ts` (runs + fitness gate reports),
-  `learning.ts` (operator-gated proposals), `delta.ts` (Delta demo mirror)
+  `analysis.ts` (append-only analysis records, monitoring/performance/health queries, arena and
+  catalyst actions), `learning.ts` (operator-gated proposals), `delta.ts` (Delta demo mirror)
 - `src/pages/` — terminal screens · `src/components/arise/` — shell + shared UI
+
+### Analysis section (append-only)
+
+Saving an analysis writes one row to `analysisRecords`; there is no update or delete endpoint.
+The original prediction, plan, risk checks, evidence, strategy attribution and trade card are
+copied at save time, so later analyses and paper outcomes cannot rewrite history. Monitoring
+uses only completed observations at or after the paper entry. The strategy arena is ten
+rule-based strategies, not ten AI models, and returns NO TRADE when no candidate clears its
+admission gates. Its stage-4 deterministic risk review is a veto: if it returns NO_TRADE the
+selected strategy is cleared, so a risk-blocked candidate cannot be saved as the winner.
+Upcoming catalysts require `ECONOMIC_CALENDAR_URL`; when it is unset the UI
+reports `UNCONFIGURED` and shows no events rather than inventing them.
 
 ## Golden rules enforced in code
 
@@ -171,17 +189,37 @@ POSITION MONITORING (SL/TP on bar extremes) → EQUITY CURVE → AUDIT TRAIL
 - Feeds are third-party and can block, rate-limit or change shape; each feed fails in isolation
   and the dashboard discloses per-feed health instead of hiding the gap.
 - FX has no top-of-book (Yahoo limitation): spread checks treat it as unavailable, not zero.
-- Equity marks open positions at entry price between decisions.
+- Equity marks use fresh completed 15m data where available. If a mark is unavailable the position
+  is carried at entry for display and new entries are blocked with `MARKS_UNAVAILABLE`; the
+  account anchors are not advanced on incomplete marks.
 - Backtesting, multi-project strategies, and learning-weight updates are out of V1 scope.
+- The Analysis section's **upcoming catalysts** require a configured JSON economic-calendar
+  provider (`ECONOMIC_CALENDAR_URL`). With no provider the module is honestly `UNCONFIGURED`;
+  headline sentiment (`news-v1`) and verified catalysts are separate data paths. No provider is
+  bundled, so this module is not operational until an owner configures one.
+- The **Strategy AI Arena** is comparative rule-based evidence on one instrument/timeframe per
+  run. It is not a portfolio optimiser, does not tune parameters (so there is no selection
+  leakage), and its historical metrics are not a forecast. An arena pass is not an order.
+- Performance metrics are suppressed as evidence below 20 evaluated predictions and 20 closed
+  paper trades; calibration is not reported because the pipeline emits no calibrated
+  probabilities.
+- Analysis history is frozen at save time and retained per user without a prune endpoint. The
+  existing `decisions` audit rows still have their documented 120-row retention; saved analysis
+  records are what preserve the original prediction beyond that window.
 
 ## Development
 
 ```bash
 bun install
-bun convex dev --once && bun tsc -b --noEmit   # verify backend + types
+# First run configures the local deployment and stops until the auth-config env is set.
+bunx convex dev --once
+bunx convex env set SITE_URL http://localhost:5173
+bunx convex dev --once && bunx tsc -b --noEmit   # verify backend + types
 ```
 
-The platform runs the dev server and Convex dev processes; do not run them manually.
+`CONVEX_SITE_URL` is a Convex built-in on a real deployment; do not try to set it with
+`convex env set`. The platform runs the dev server and Convex dev processes; do not run
+them manually.
 
 ## Configuration (verified semantics)
 
@@ -194,6 +232,15 @@ The platform runs the dev server and Convex dev processes; do not run them manua
 
 Optional integrations (`STRIPE_*`, `ARISE_ADMIN_CODE`, `DELTA_*`, `EMAIL_OTP_API_KEY`) stay disabled
 when unset. Nothing in this repository contains a real secret.
+
+## Analysis quota semantics
+
+The daily analysis quota is reserved **atomically before** any provider work
+(`billingFunctions.reserveAnalysisInternal`), so concurrent requests cannot all pass on the last
+remaining analysis. A reservation is **not refunded** when the provider later fails or returns
+invalid data: that request still consumes one analysis. This is deliberate — it prevents a flaky
+provider from being used to amplify requests — and failed runs are reported as errors, never as a
+free retry. Re-saving an already-saved analysis is idempotent and does not consume another quota.
 
 ## Data-quality states and gating
 
@@ -212,9 +259,11 @@ when unset. Nothing in this repository contains a real secret.
 ## Authorization
 
 All server checks resolve the caller from the verified identity (`convex/lib/authz.ts`):
-`requireAuthenticatedUser`, `requireActiveUser`, `requireActiveAdmin`. Administrative endpoints
-require an **active** administrator — a disabled admin is rejected everywhere. Client-supplied user
-IDs or roles are never trusted; ownership is checked against the authenticated user.
+`requireAuthenticatedUser`, `requireActiveUser`, `requireActiveAdmin`, plus the read-path
+`requireActiveUserIfSignedIn` (anonymous reads return empty; a **disabled** signed-in account is
+rejected before any tenant data is returned). Administrative endpoints require an **active**
+administrator — a disabled admin is rejected everywhere. Client-supplied user IDs or roles are
+never trusted; ownership is checked against the authenticated user.
 
 The complete public-endpoint inventory (every query/mutation/action and its requirement) is in
 [`ARISE_AUTHORIZATION_MATRIX.md`](./ARISE_AUTHORIZATION_MATRIX.md).
@@ -258,15 +307,15 @@ committed so this needs no Convex login or local environment file; regenerate th
 
 ## Environment example
 
-`.env.example` is host-protected in the repair sandbox, so the corrected values (in particular
-`CONVEX_SITE_URL=http://127.0.0.1:3211`, **not** the Vite origin) are documented in
-[`ENVIRONMENT.md`](./ENVIRONMENT.md), together with the precise limitation and a reviewable
-workaround.
+`.env.example` contains local-development placeholders only. `CONVEX_SITE_URL` is the Convex
+HTTP Actions/site origin (`http://127.0.0.1:3211` locally, `https://<deployment>.convex.site`
+hosted), **not** the Vite origin; `SITE_URL` is the frontend origin. The full verified variable
+inventory, including optional integrations and fail-closed behaviour, is in
+[`ENVIRONMENT.md`](./ENVIRONMENT.md).
 
 ## Repository layout
 
-This repository still tracks the application as `Arise-b-main-repaired.zip`; the verified source is
-extracted at `Arise-b-main/`. The archive is the **pre-repair** snapshot, so CI must not be pointed
-at it. [`MIGRATION.md`](../MIGRATION.md) is the reviewable plan for exposing the source at the
-repository root (archive checksum, verification gates, history and rollback), to be executed from
-the Changes panel in one reviewed commit.
+The application source is committed at `Arise-b-main/` and is the source of record. The tracked
+`Arise-b-main-repaired.zip` is a **pre-repair** snapshot and is never used by CI. The optional
+root-layout move and archive retirement are described in [`MIGRATION.md`](../MIGRATION.md); they
+are not required for the committed source to build and test.

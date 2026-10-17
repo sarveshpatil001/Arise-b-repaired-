@@ -3,9 +3,19 @@
 // relabels hourly data as daily, which corrupts every downstream interval computation
 // (staleness, gaps, marks), so the bucket size is asserted explicitly.
 
-import { describe, expect, it } from "vitest";
-import { resampleBars, resampleForInterval } from "./providers";
+import { describe, expect, it, vi } from "vitest";
+import axios from "axios";
+import {
+  BINANCE_HOSTS,
+  fetchMarketData,
+  isPrimarySeries,
+  resampleBars,
+  resampleForInterval,
+  type MarketFetch,
+} from "./providers";
 import type { RawBar } from "./validate";
+
+vi.mock("axios", () => ({ default: { get: vi.fn() } }));
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -77,6 +87,99 @@ describe("resampleBars (4h/1d fallback aggregation)", () => {
     const out = resampleBars(hourly(), HOUR);
     expect(out).toHaveLength(6);
     expect(out.map((b) => b.time)).toEqual(hourly().map((b) => b.time));
+  });
+});
+
+describe("Yahoo 4h wiring", () => {
+  it("aggregates Yahoo's hourly response into real 4h bars", async () => {
+    const start = Date.parse("2026-10-01T00:00:00Z");
+    const timestamps = Array.from({ length: 8 }, (_, i) => (start + i * HOUR) / 1000);
+    const get = axios.get as unknown as { mockResolvedValueOnce: (v: unknown) => void };
+    get.mockResolvedValueOnce({
+      data: {
+        chart: {
+          result: [
+            {
+              timestamp: timestamps,
+              meta: { regularMarketPrice: 105 },
+              indicators: {
+                quote: [
+                  {
+                    open: timestamps.map(() => 100),
+                    high: timestamps.map(() => 106),
+                    low: timestamps.map(() => 99),
+                    close: timestamps.map(() => 105),
+                    volume: timestamps.map(() => 10),
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    const out = await fetchMarketData("EURUSD", "4h", 8);
+    expect(out.interval).toBe("4h");
+    expect(out.data.provider).toBe("yahoo");
+    expect(out.data.bars).toHaveLength(2); // never eight hourly bars relabelled as 4h
+    expect(out.data.bars[1].time - out.data.bars[0].time).toBe(4 * HOUR);
+  });
+});
+
+describe("provider provenance", () => {
+  function fetch(overrides: Partial<MarketFetch> & { provider?: string; interval?: string } = {}): MarketFetch {
+    const { provider = "binance", interval = "1h", ...rest } = overrides;
+    return {
+      data: { bars: [], bestBid: null, bestAsk: null, provider },
+      interval,
+      requestedInterval: "1h",
+      fellBack: false,
+      errors: [],
+      ...rest,
+    };
+  }
+
+  it("does not treat the separate Binance US exchange as Binance spot data", () => {
+    // api.binance.us is a different order book. Returning it under provider
+    // "binance" would relabel a different market's prices as Binance spot.
+    expect(BINANCE_HOSTS.some((h) => h.includes("binance.us"))).toBe(false);
+  });
+
+  it("accepts the primary provider at the requested interval", () => {
+    expect(isPrimarySeries("BTCUSDT", fetch())).toBe(true);
+    expect(isPrimarySeries("EURUSD", fetch({ provider: "yahoo" }))).toBe(true);
+  });
+
+  it("accepts a same-provider 4h resample (interval still 4h)", () => {
+    expect(
+      isPrimarySeries(
+        "EURUSD",
+        fetch({ provider: "yahoo", interval: "4h", requestedInterval: "4h", fellBack: true, fallbackFrom: "1h (resampled to 4h)" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses the Delta demo fallback for a Binance spot symbol", () => {
+    // BTCUSDT is Binance spot; the Delta fallback maps it to BTCUSD, a different
+    // instrument. Accepting it would authorize a trade on the wrong price basis.
+    expect(
+      isPrimarySeries("BTCUSDT", fetch({ provider: "delta", fellBack: true, fallbackFrom: "delta" })),
+    ).toBe(false);
+  });
+
+  it("refuses an interval fallback that no longer matches the request", () => {
+    expect(
+      isPrimarySeries("BTCUSDT", fetch({ interval: "15m", requestedInterval: "1h", fellBack: true, fallbackFrom: "15m" })),
+    ).toBe(false);
+  });
+});
+
+describe("interval validation", () => {
+  it("refuses an unsupported interval before dispatching a provider request", async () => {
+    // Binance's map used to fall back to "1h" silently, returning hourly bars
+    // labelled with the caller's unsupported interval.
+    await expect(fetchMarketData("BTCUSDT", "2h")).rejects.toThrow(/unsupported interval/);
   });
 });
 

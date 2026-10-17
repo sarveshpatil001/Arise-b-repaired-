@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import {
   Activity,
   Brain,
+  BrainCircuit,
   CreditCard,
   FlaskConical,
   Home,
@@ -22,6 +23,7 @@ const PRIMARY_NAV = [
   { to: "/dashboard/bots", label: "BOT LAB", icon: FlaskConical },
   { to: "/dashboard/markets", label: "MARKETS", icon: LineChart },
   { to: "/dashboard/intelligence", label: "INTELLIGENCE", icon: Brain },
+  { to: "/dashboard/analysis", label: "ANALYSIS", icon: BrainCircuit },
   { to: "/dashboard/trades", label: "TRADES", icon: TrendingUp },
   { to: "/dashboard/risk", label: "RISK", icon: ShieldAlert },
   { to: "/dashboard/billing", label: "BILLING", icon: CreditCard },

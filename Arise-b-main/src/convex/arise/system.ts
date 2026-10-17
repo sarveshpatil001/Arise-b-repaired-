@@ -1,6 +1,6 @@
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, query } from "../_generated/server";
+import { requireActiveUser } from "../lib/authz";
 
 /**
  * Operational event log — platform-wide health telemetry that powers the System page.
@@ -52,10 +52,8 @@ export const record = internalMutation({
 export const list = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit }) => {
-    const userId = await getAuthUserId(ctx);
-    if (userId === null) throw new Error("Not authenticated");
-    const viewer = await ctx.db.get(userId);
-    const isAdmin = viewer?.role === "admin" && viewer.disabled !== true;
+    const { user } = await requireActiveUser(ctx);
+    const isAdmin = user.role === "admin";
 
     const requested = limit ?? DEFAULT_LIST_LIMIT;
     const capped = Number.isFinite(requested)

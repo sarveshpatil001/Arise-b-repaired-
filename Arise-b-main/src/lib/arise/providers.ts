@@ -154,10 +154,9 @@ export interface FetchedData {
  * fallback and losing top-of-book. The public data hosts below serve the same exchange
  * market data without a key and without the regional restriction.
  */
-const BINANCE_HOSTS = [
+export const BINANCE_HOSTS = [
   "https://api.binance.com",
   "https://data-api.binance.vision",
-  "https://api.binance.us",
 ] as const;
 
 /** First host that answers, else re-throw the last error. */
@@ -237,8 +236,12 @@ async function fetchYahoo(symbol: string, interval: string): Promise<FetchedData
       // note: null slots (market closed) are skipped — quality notes reflect this via gaps
     }
     if (raw.length === 0) throw new Error("yahoo returned no usable bars");
+    // Yahoo has no native 4h resolution. It is fetched as 1h bars, so it must
+    // be aggregated before being labelled 4h; returning hourly bars with a 4h
+    // label corrupts every downstream gap/freshness/feature calculation.
+    const bars = interval === "4h" ? resampleForInterval(raw, "4h") : raw;
     const regular: number | undefined = q;
-    return { bars: raw, bestBid: null, bestAsk: null, provider: "yahoo", regular: regular ?? undefined };
+    return { bars, bestBid: null, bestAsk: null, provider: "yahoo", regular: regular ?? undefined };
   });
 }
 
@@ -312,6 +315,25 @@ export interface MarketFetch {
   errors: string[];
 }
 
+/**
+ * True only when the returned series is the requested instrument AND interval
+ * from its primary provider.
+ *
+ * `fellBack` alone is not enough: a 4h Yahoo series legitimately falls back to
+ * hourly bars that are then resampled to 4h (same provider, same interval), while
+ * a crypto failover to the Delta demo feed returns BTCUSD instead of BTCUSDT and a
+ * 15m failover changes the timeframe. Execution, risk marks and backtests must
+ * refuse the latter two rather than relabel them.
+ */
+export function isPrimarySeries(symbol: string, fetched: MarketFetch): boolean {
+  const expected = resolveProvider(symbol);
+  if (!expected) return false;
+  return (
+    fetched.data.provider === expected &&
+    fetched.interval === fetched.requestedInterval
+  );
+}
+
 /** Fetch OHLCV with fallback: 4h/1d use resampling, 1m/5m/15m fall back to 15m on failure. */
 export async function fetchMarketData(
   symbol: string,
@@ -321,6 +343,12 @@ export async function fetchMarketData(
   const provider = resolveProvider(symbol);
   const errors: string[] = [];
   if (!provider) throw new Error(`unsupported symbol: ${symbol}`);
+  // Validate before provider dispatch. Binance's interval map used to fall back to
+  // "1h", so an unsupported request such as "2h" returned hourly bars labelled
+  // "2h" — a different timeframe presented as the requested one.
+  if (!(SUPPORTED_INTERVALS as readonly string[]).includes(interval)) {
+    throw new Error(`unsupported interval: ${interval}`);
+  }
 
   async function tryInterval(iv: string): Promise<FetchedData> {
     return provider === "binance"

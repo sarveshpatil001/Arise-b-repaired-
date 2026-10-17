@@ -62,6 +62,40 @@ export function useSystemEvents(limit = 50) {
   return useQuery(api.arise.system.list, { limit });
 }
 
+// ---------------- Analysis section ----------------
+
+export function useAnalysisHistory(limit = 60) {
+  return useQuery(api.arise.analysis.history, { limit });
+}
+
+export function useLatestAnalysisRecord(symbol?: string) {
+  return useQuery(api.arise.analysis.latest, symbol ? { symbol } : {});
+}
+
+export function useAnalysisMonitoring(symbol?: string) {
+  return useQuery(api.arise.analysis.monitoring, symbol ? { symbol } : {});
+}
+
+export function useAnalysisPerformance() {
+  return useQuery(api.arise.analysis.performance, {});
+}
+
+export function useAnalysisHealth() {
+  return useQuery(api.arise.analysis.health, {});
+}
+
+export function useSaveAnalysis() {
+  return useMutation(api.arise.analysis.save);
+}
+
+export function useRunStrategyArena() {
+  return useAction(api.arise.analysis.strategyArena);
+}
+
+export function useFetchCatalysts() {
+  return useAction(api.arise.analysis.catalysts);
+}
+
 export function useEntitlements() {
   return useQuery(api.arise.billingFunctions.myEntitlements, {});
 }

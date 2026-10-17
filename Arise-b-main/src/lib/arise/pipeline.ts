@@ -10,7 +10,7 @@ import {
   validateExecution,
   type RiskEngineInput,
 } from "./risk";
-import { computeQuantFeatures } from "./quant";
+import { computeQuantFeatures, intervalMs } from "./quant";
 import { evaluateDecisionGate, type DecisionGateResult } from "./evidence";
 import { assessFreshness, validateBars, type RawBar } from "./validate";
 import { assessNews, newsAI, type NewsAssessment, type RawNewsItem } from "./news";
@@ -83,7 +83,22 @@ export function buildSnapshot(
     return { snapshot: null, notes, errorCode: "NO_VALID_DATA" };
   }
 
-  const freshness = assessFreshness(validation.bars, {
+  // A decision may only use COMPLETED candles. Providers include the currently
+  // forming candle, whose close keeps moving; using it authorized a trade on a price
+  // that did not exist yet. The chart endpoint may still display forming bars, but
+  // every decision/mark snapshot is built from completed bars only.
+  const completedBars = validation.bars.filter(
+    (bar) => bar.time + intervalMs(opts.interval) <= opts.now,
+  );
+  if (completedBars.length === 0) {
+    notes.push("no completed candles in the returned series");
+    return { snapshot: null, notes, errorCode: "NO_COMPLETED_DATA" };
+  }
+  if (completedBars.length !== validation.bars.length) {
+    notes.push(`${validation.bars.length - completedBars.length} forming bar(s) excluded`);
+  }
+
+  const freshness = assessFreshness(completedBars, {
     interval: opts.interval,
     now: opts.now,
     config: opts.config,
@@ -101,12 +116,12 @@ export function buildSnapshot(
           ? "degraded"
           : freshness.quality;
 
-  const last = validation.bars[validation.bars.length - 1];
+  const last = completedBars[completedBars.length - 1];
   const snapshot: MarketSnapshot = {
     symbol: opts.symbol,
     assetClass: opts.assetClass,
     interval: opts.interval,
-    bars: validation.bars,
+    bars: completedBars,
     latest: last,
     quoteAgeSec: freshness.quoteAgeSec,
     bestBid: opts.bestBid,

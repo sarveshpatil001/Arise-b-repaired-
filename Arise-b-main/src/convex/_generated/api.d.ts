@@ -9,6 +9,7 @@
  */
 
 import type * as arise_admin from "../arise/admin.js";
+import type * as arise_analysis from "../arise/analysis.js";
 import type * as arise_backtest from "../arise/backtest.js";
 import type * as arise_billing from "../arise/billing.js";
 import type * as arise_billingFunctions from "../arise/billingFunctions.js";
@@ -37,6 +38,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   "arise/admin": typeof arise_admin;
+  "arise/analysis": typeof arise_analysis;
   "arise/backtest": typeof arise_backtest;
   "arise/billing": typeof arise_billing;
   "arise/billingFunctions": typeof arise_billingFunctions;

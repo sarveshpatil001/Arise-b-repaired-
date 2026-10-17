@@ -457,6 +457,121 @@ describe("disabled-account enforcement", () => {
     expect(stillOpen?.status).toBe("OPEN");
   });
 
+  it("rejects a disabled account on every user-scoped read", async () => {
+    const t = newBackend();
+    const user = await seedUser(t, { email: "disabled@example.com", disabled: true });
+    const seeded = await t.run(async (ctx) => {
+      await ctx.db.insert("paperAccounts", {
+        userId: user,
+        balance: 10_000,
+        equityHighWaterMark: 10_000,
+        dayStartEquity: 10_000,
+        dayKey: "2026-10-17",
+        emergencyStop: false,
+        startingBalance: 10_000,
+      });
+      await ctx.db.insert("equityPoints", {
+        userId: user,
+        t: Date.now(),
+        equity: 10_000,
+        cash: 10_000,
+        drawdownPct: 0,
+      });
+      const decisionId = await ctx.db.insert("decisions", {
+        userId: user,
+        symbol: "BTCUSDT",
+        interval: "1h",
+        mode: "paper" as const,
+        status: "WAIT",
+        direction: "FLAT",
+        confidence: 0,
+        regime: "RANGE",
+        thesis: "seed",
+        recommendedAction: "WAIT",
+        dataQuality: "valid",
+        dataAgeSec: 1,
+        dataSource: "test",
+        dataTimestamp: Date.now(),
+        mind: {},
+        agents: {},
+        snapshotMeta: { lastClose: 100, lastBarTime: Date.now() },
+      });
+      await ctx.db.insert("positions", {
+        userId: user,
+        decisionId,
+        symbol: "BTCUSDT",
+        side: "LONG",
+        qty: 1,
+        entryPrice: 100,
+        stopLoss: 95,
+        takeProfit: 110,
+        entryFee: 0.04,
+        status: "OPEN",
+        openedAt: Date.now(),
+      });
+      const botId = await ctx.db.insert("bots", {
+        userId: user,
+        name: "bot",
+        strategyId: "buy-hold",
+        createdAt: Date.now(),
+      });
+      const runId = await ctx.db.insert("backtestRuns", {
+        userId: user,
+        botId,
+        botName: "bot",
+        strategyId: "buy-hold",
+        symbol: "BTCUSDT",
+        interval: "1h",
+        dataKind: "REAL",
+        dataSource: "binance",
+        barCount: 400,
+        seed: 42,
+        feeBps: 4,
+        slippageBps: 2,
+        positionPct: 15,
+        stopPct: 1.5,
+        targetPct: 3,
+        inSamplePct: 0.7,
+        stress: "none",
+        status: "COMPLETED",
+        metrics: {},
+        fitness: {},
+        equityCurve: [],
+        trades: [],
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("subscriptions", {
+        userId: user,
+        stripeCustomerId: "cus_seed",
+        planKey: "pro",
+        status: "active",
+        cancelAtPeriodEnd: false,
+        updatedAt: Date.now(),
+      });
+      return { decisionId, botId, runId };
+    });
+    const as = t.withIdentity({ subject: user });
+
+    for (const call of [
+      () => as.query(api.arise.trading.myAccount, {}),
+      () => as.query(api.arise.trading.openPositions, {}),
+      () => as.query(api.arise.trading.closedPositions, {}),
+      () => as.query(api.arise.trading.latestMarks, {}),
+      () => as.query(api.arise.decisions.list, {}),
+      () => as.query(api.arise.decisions.byId, { id: seeded.decisionId }),
+      () => as.query(api.arise.decisions.latest, {}),
+      () => as.query(api.arise.equity.list, {}),
+      () => as.query(api.arise.backtest.list, {}),
+      () => as.query(api.arise.backtest.runs, {}),
+      () => as.query(api.arise.backtest.get, { runId: seeded.runId }),
+      () => as.query(api.arise.billingFunctions.mySubscription, {}),
+      () => as.query(api.arise.billingFunctions.myEntitlements, {}),
+      () => as.query(api.arise.system.list, { limit: 5 }),
+    ]) {
+      await expect(call()).rejects.toThrow(/ACCOUNT_DISABLED/);
+    }
+  });
+
   it("still allows an active administrator", async () => {
     const t = newBackend();
     const admin = await seedUser(t, { email: "root@example.com", role: "admin" });
@@ -666,6 +781,42 @@ describe("remaining isolation and quota boundaries", () => {
     await expect(run("ghost")).rejects.toThrow(/Not authenticated/);
     await expect(run(deleted)).rejects.toThrow(/Not authenticated/);
     await expect(run(disabled)).rejects.toThrow(/ACCOUNT_DISABLED/);
+  });
+});
+
+// Regression for the concurrent-quota bypass: the action used to read the remaining
+// count, do its work, then increment. Concurrent requests all observed the same count
+// and could exceed the daily plan limit. The reservation is now one serialized mutation.
+describe("atomic analysis quota", () => {
+  it("allows exactly the plan limit across concurrent reservations", async () => {
+    const t = newBackend();
+    const user = await seedUser(t);
+    const as = t.withIdentity({ subject: user });
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 6 }, () =>
+        as.mutation(internal.arise.billingFunctions.reserveAnalysisInternal, {}),
+      ),
+    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(5);
+    const rejected = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0].reason)).toMatch(/PLAN_LIMIT_REACHED/);
+
+    const usage = await t.run(async (ctx) =>
+      (await ctx.db.query("analysisUsage").collect())[0],
+    );
+    expect(usage?.count).toBe(5);
+  });
+
+  it("refuses to reserve for a disabled account", async () => {
+    const t = newBackend();
+    const user = await seedUser(t, { email: "disabled@example.com", disabled: true });
+    await expect(
+      t
+        .withIdentity({ subject: user })
+        .mutation(internal.arise.billingFunctions.reserveAnalysisInternal, {}),
+    ).rejects.toThrow(/ACCOUNT_DISABLED/);
   });
 });
 

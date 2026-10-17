@@ -40,6 +40,8 @@ export interface MonitorMark {
   interval: string; // resolved interval of the fetched series
   requestedInterval: string;
   source: string;
+  /** Validation verdict for the whole series. Degraded series never settle a trade. */
+  quality?: "valid" | "degraded";
   barsCount: number;
   bars: MonitorBar[]; // oldest → newest
 }
@@ -51,6 +53,20 @@ export function assessMark(
   config: { barStaleMultiplier: number },
 ): { usable: boolean; state: "USABLE" | "STALE" | "INVALID"; detail: string } {
   if (!mark) return { usable: false, state: "INVALID", detail: "no market data returned" };
+  // Only the primary provider for the instrument may settle a position. A Delta
+  // demo perpetual (fallback) is a different instrument from Binance spot, and a
+  // Yahoo 15m series is not the same feed as the Binance series; either would
+  // relabel a price basis. Fallback data is refused, not silently accepted.
+  if (mark.source !== "binance" && mark.source !== "yahoo") {
+    return {
+      usable: false,
+      state: "INVALID",
+      detail: `non-primary provider "${mark.source}" cannot settle a position`,
+    };
+  }
+  if (mark.quality === "degraded") {
+    return { usable: false, state: "INVALID", detail: "market data series is degraded" };
+  }
   if (!Array.isArray(mark.bars) || mark.bars.length === 0) {
     return { usable: false, state: "INVALID", detail: "no usable bars in series" };
   }
@@ -99,6 +115,8 @@ export function assessMark(
 export interface MonitorPosition {
   _id: string;
   userId?: string;
+  /** Bar time at/after which this position existed. Earlier bars are never evaluated. */
+  openedAt?: number;
   symbol: string;
   side: string; // LONG | SHORT
   qty: number;
@@ -133,6 +151,9 @@ export function evaluateExit(
   now: number,
 ): ExitPatch | null {
   if (position.status !== "OPEN") return null; // never process closed positions
+  // A bar that started before entry contains pre-entry price action. Using its
+  // high/low could close a position at a level it never traded through.
+  if (position.openedAt !== undefined && bar.barTime < position.openedAt) return null;
 
   const exit = checkExit(
     {

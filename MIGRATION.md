@@ -2,24 +2,24 @@
 
 ## Current state
 
-- The repository tracks only `Arise-b-main-repaired.zip` and a 19-byte `README.md`.
-- The verified application source is extracted at `Arise-b-main/` and is **not yet
-  committed**. That is why a clean checkout cannot build the app today.
-- `Arise-b-main-repaired.zip` is the **pre-repair** snapshot:
+- The verified application source is committed at `Arise-b-main/`; a clean checkout
+  builds and tests it (CI runs on `main`).
+- `Arise-b-main-repaired.zip` remains the tracked **pre-repair** snapshot:
   `sha256 92c8aff7a0e3505ba108d0616f5204cd4c410bed7900eb964db4761866d0682a`.
   It does not contain the security repairs.
 - CI (`.github/workflows/ci.yml`) no longer extracts the archive; it verifies the
   committed source tree and supports either the current `Arise-b-main/` subdirectory
   or a root-level layout.
 
-The source is committed on a dedicated repair branch (never force-pushed, never
-rewritten in place). CI is written to locate the source at either the repository root
-or `Arise-b-main/`, so a later layout move does not invalidate the workflow.
+The source was migrated on a reviewed branch and merged to `main`; no history was
+rewritten and no force-push was used. CI locates the source at either the repository
+root or `Arise-b-main/`, so a later layout move does not invalidate the workflow.
 
-## Preconditions (already verified)
+## Baseline (pre-hardening, already verified)
 
-A clean copy of `Arise-b-main/` with no `node_modules`, no `.convex/` state and no
-dot-env files was created in a temporary directory and passed:
+The clean tree that was merged passed the following before the post-merge hardening
+described in the audit report. The post-hardening tree is re-verified separately
+(550 tests after the final hardening pass).
 
 ```
 bun install --frozen-lockfile   # 413 packages, no changes
@@ -37,11 +37,12 @@ whenever a Convex function is added or renamed.
 Recovery is possible at every step: the original archive remains in git history and
 can be extracted from the checksum above.
 
-## Migration steps (one reviewed commit, performed from the Changes panel)
+## Migration steps
 
 1. **Snapshot the archive.** Record `sha256sum Arise-b-main-repaired.zip` in the pull
-   request description. Do not delete the archive in this commit.
-2. **Move the source to the repository root** without changing contents:
+   request description. Do not delete the archive in this commit. (Done.)
+2. **Keep or move the source.** The source is committed at `Arise-b-main/`; the root
+   move below remains optional and has not been performed. If it is done:
    - `git mv Arise-b-main/* .` is not sufficient for dotfiles; move those explicitly
      (`.gitignore`, `.github` stays at root).
    - Keep `Arise-b-main-repaired.zip` unchanged; `.gitignore` already ignores `*.zip`
@@ -61,6 +62,22 @@ can be extracted from the checksum above.
 6. **Preview commands.** Re-save them for the root layout
    (`freebuff-preview set-install "bun install --frozen-lockfile"`,
    `freebuff-preview set "bun run dev" 5173`) if the platform does not detect them.
+
+## Analysis section (additive, post-merge)
+
+The Analysis navigation item (`/dashboard/analysis`) is additive: existing routes, the home
+screen, authentication, paper trading and admin surfaces are unchanged. The feature adds:
+
+- one table, `analysisRecords`, which is append-only (no update/delete function);
+- one index, `positions.userId`, for bounded per-user monitoring/performance reads;
+- pure modules `src/lib/arise/analysis.ts` and `src/lib/arise/arena.ts`;
+- Convex endpoints in `src/convex/arise/analysis.ts`.
+
+Convex creates the table/index on deploy; no data backfill or destructive migration is needed.
+`bunx convex dev --once` must be run after checkout so `_generated` includes the new module.
+
+The optional catalyst feed is disabled unless `ECONOMIC_CALENDAR_URL` is set; existing
+installations need no action to stay safe, and the UI will report `UNCONFIGURED`.
 
 ## History
 

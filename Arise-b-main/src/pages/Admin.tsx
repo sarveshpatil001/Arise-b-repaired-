@@ -106,6 +106,7 @@ export default function Admin() {
 function OverviewTab() {
   const monitor = useMonitorStatus();
   const stats = useQuery(api.arise.admin.overview, {});
+  const market = useQuery(api.arise.admin.marketDataStatus, {});
   const sysEvents = useQuery(api.arise.system.list, { limit: 8 });
   const activity = useQuery(api.arise.admin.recentAdminActivity, { limit: 6 });
 
@@ -167,9 +168,9 @@ function OverviewTab() {
               that failed would surface as an error event above rather than a row here.
               POSITION MONITOR is measured, not asserted — see monitorState tick history. */}
           {[
-            { name: "AI SERVICE", state: "ONLINE" },
-            { name: "MARKET DATA", state: "LIVE" },
-            { name: "DATABASE", state: "ONLINE" },
+            { name: "AI SERVICE", state: stats ? "ONLINE" : "UNKNOWN" },
+            { name: "MARKET DATA", state: market?.state ?? "UNKNOWN" },
+            { name: "DATABASE", state: stats ? "ONLINE" : "UNKNOWN" },
             { name: "RISK ENGINE", state: "RUNNING" },
             { name: "EXECUTION", state: "PAPER" },
             { name: "POSITION MONITOR", state: monitor?.state ?? "OFFLINE" },
